@@ -1,5 +1,4 @@
 import os
-import sys
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,12 +12,9 @@ from mpl_interactions import panhandler, zoom_factory
 import pickle
 from sklearn.metrics import roc_curve, auc
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 from config import ACCESS_TOKEN, INFORM_FILES_PATH, GRANZYME_B_IMAGE_FOLDER, PROCESSED_DATA_FOLDER, MODEL_PATH, PATCH_SIZE
 from utils.dropbox_utils import DropboxHandler
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 from utils.data_utils import global_inform_values, label_relevant_cells
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 from utils.image_utils import process_image
 
 dbx = DropboxHandler(ACCESS_TOKEN)
@@ -285,7 +281,5 @@ class InferenceWithThreshold:
         return optimal_threshold
 
 # Example usage:
-example = 'Opal 221_8'
-process_data_folder = PROCESSED_DATA_FOLDER + '/' + example
 inference = InferenceWithThreshold(INFORM_FILES_PATH, GRANZYME_B_IMAGE_FOLDER, PROCESSED_DATA_FOLDER, MODEL_PATH, PATCH_SIZE)
-optimal_threshold, inform_data = inference.run(example)
+optimal_threshold, inform_data = inference.run('Opal 221_8')

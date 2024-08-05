@@ -16,9 +16,7 @@ from sklearn.metrics import roc_curve, auc
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 from config import ACCESS_TOKEN, INFORM_FILES_PATH, GRANZYME_B_IMAGE_FOLDER, PROCESSED_DATA_FOLDER, MODEL_PATH, PATCH_SIZE
 from utils.dropbox_utils import DropboxHandler
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 from utils.data_utils import global_inform_values, label_relevant_cells
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 from utils.image_utils import process_image
 
 dbx = DropboxHandler(ACCESS_TOKEN)

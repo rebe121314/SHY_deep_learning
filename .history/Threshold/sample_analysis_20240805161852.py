@@ -5,28 +5,46 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, roc_curve, auc
-import seaborn as sns
+from sklearn.model_selection import cross_val_score
+import cv2
+import dropbox
+import io
+import os
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from albumentations.pytorch import ToTensorV2
+import albumentations as A
+from skimage import io as skio, img_as_ubyte, measure
+from skimage.color import rgb2hed, hed2rgb
+from skimage.exposure import rescale_intensity, equalize_adapthist
+import json
+from tqdm import tqdm
+import matplotlib.patches as mpatches
+from cellpose import models
+import pyclesperanto_prototype as cle
+from skimage.measure import regionprops
+import python_calamine
 import torch
 import torchvision
 import torchvision.transforms.functional as F
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-import matplotlib.patches as mpatches
+from sklearn.metrics import roc_curve, auc
 from matplotlib.widgets import Button
 from mpl_interactions import panhandler, zoom_factory
-from cellpose import models
-from skimage import io as skio, measure, img_as_ubyte
-from skimage.color import rgb2hed, hed2rgb
-from skimage.exposure import rescale_intensity, equalize_adapthist
-from tqdm import tqdm
 import pickle
-from config import ACCESS_TOKEN
-from utils.dropbox_utils import DropboxHandler
-from utils.data_utils import global_inform_values, label_relevant_cells
+from sklearn.metrics import accuracy_score
+import seaborn as sns
 
-# Configurations
-dbx = DropboxHandler(ACCESS_TOKEN)
 
+#Use later for training?? CD8, CD4, CD56, Tumor cell
+
+
+# Connect to Dropbox
+ACCESS_TOKEN = 'sl.B6bzi0B3Tf7vLPKr7oG0AjMXGaxvJgbOkf_0BExeTgjF7Jl62QO3Vu_U68k9mkk8r-AmWsY7Ekv-CVQNo0AJeIQvTFw5kxzeMJQK_vZKhN60TbPCfaXhFQJmBSASut2ENqiHmXjEogdr'
+dbx = dropbox.Dropbox(ACCESS_TOKEN)
+
+#All the relevant info is in the
 class InferenceWithThreshold:
     def __init__(self, inform_files, granzyme_b_image_folder, processed_data_folder, model_path, patch_size, manual=False):
         self.inform_files = inform_files
@@ -38,9 +56,11 @@ class InferenceWithThreshold:
         self.manual = manual
 
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-        self.model = self.get_model(num_classes=2)
+        self.model = self.get_model(num_classes=2)  # 2 classes: background and Granzyme B
         self.model.load_state_dict(torch.load(model_path))
         self.model.to(self.device)
+
+
 
     def get_model(self, num_classes):
         model = torchvision.models.detection.maskrcnn_resnet50_fpn(weights='DEFAULT')
@@ -48,6 +68,74 @@ class InferenceWithThreshold:
         in_features = model.roi_heads.box_predictor.cls_score.in_features
         model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
         return model
+
+    def list_files_in_folder(self, folder_path):
+        files = []
+        result = dbx.files_list_folder(folder_path)
+        files.extend([entry.name for entry in result.entries if isinstance(entry, dropbox.files.FileMetadata)])
+        while result.has_more:
+            result = dbx.files_list_folder_continue(result.cursor)
+            files.extend([entry.name for entry in result.entries if isinstance(entry, dropbox.files.FileMetadata)])
+        return files
+
+    def read_image_from_dropbox(self, dropbox_path):
+        _, res = dbx.files_download(path=dropbox_path)
+        file_bytes = io.BytesIO(res.content)
+        image = skio.imread(file_bytes)
+        return image
+
+    def read_excel_from_dropbox(self, dropbox_path):
+        _, res = dbx.files_download(path=dropbox_path)
+        file_bytes = io.BytesIO(res.content)
+        rows = iter(python_calamine.CalamineWorkbook.from_filelike(file_bytes).get_sheet_by_index(0).to_python())
+        headers = list(map(str, next(rows)))
+        data = [dict(zip(headers, row)) for row in rows]
+        return pd.DataFrame(data)
+
+    def relevant_rows(self, image_name, inform_excel):
+        relevant_cells = pd.DataFrame()
+        for index, row in inform_excel.iterrows():
+            if image_name in row['Sample Name']:
+                relevant_cells = relevant_cells._append(row)
+        return relevant_cells
+
+    def global_inform_values(self, inform_df):
+        mean_nuclei = np.mean(inform_df['Nucleus Autofluorescence Mean (Normalized Counts, Total Weighting)'])
+        std_nuclei = np.std(inform_df['Nucleus Autofluorescence Mean (Normalized Counts, Total Weighting)'])
+        auto_98 = mean_nuclei + 2 * std_nuclei
+        return auto_98
+
+    def label_relevant_cells(self, relevant_rows):
+        aut_nuclei = 'Nucleus Autofluorescence Mean (Normalized Counts, Total Weighting)'
+        cd8_mem = 'Membrane CD8 (Opal 570) Mean (Normalized Counts, Total Weighting)'
+        cd8_cyt = 'Cytoplasm CD8 (Opal 570) Mean (Normalized Counts, Total Weighting)'
+        gb_mem = 'Membrane Granzyme B (Opal 650) Mean (Normalized Counts, Total Weighting)'
+        gb_cyt = 'Cytoplasm Granzyme B (Opal 650) Mean (Normalized Counts, Total Weighting)'
+        gb_ent = 'Entire Cell Granzyme B (Opal 650) Mean (Normalized Counts, Total Weighting)'
+        
+
+        relevant_cells = relevant_rows.copy()
+        relevant_cells['Label'] = 'None'
+
+        relevant_cells[aut_nuclei] = pd.to_numeric(relevant_cells[aut_nuclei], errors='coerce')
+        relevant_cells[cd8_mem] = pd.to_numeric(relevant_cells[cd8_mem], errors='coerce')
+        relevant_cells[cd8_cyt] = pd.to_numeric(relevant_cells[cd8_cyt], errors='coerce')
+        relevant_cells[gb_mem] = pd.to_numeric(relevant_cells[gb_mem], errors='coerce')
+        relevant_cells[gb_cyt] = pd.to_numeric(relevant_cells[gb_cyt], errors='coerce')
+        relevant_cells[gb_ent] = pd.to_numeric(relevant_cells[gb_ent], errors='coerce')
+
+        # Add the labels to the relevant cells dataframe
+        for index, row in relevant_cells.iterrows():
+            if row[gb_ent] > 0 and row['Phenotype'] != 'Tumor cell':
+                #if row[aut_nuclei] > auto_98:
+                if row[cd8_mem] > row[cd8_cyt]:
+                    if row[gb_cyt] > row[cd8_cyt]:
+                        relevant_cells.at[index, 'Label'] = 'gb'
+            else:
+                relevant_cells.at[index, 'Label'] = 'None'
+
+        positive_gb_cells = relevant_cells[relevant_cells['Label'] == 'gb']
+        return positive_gb_cells
 
     def create_patches_no_box(self, image, patch_size):
         patches = []
@@ -72,13 +160,22 @@ class InferenceWithThreshold:
 
     def generate_bounding_boxes(self, patch, properties, pred_boxes, pred_scores, criteria_labels, i_offset, j_offset):
         boxes = []
-        margin = 5
-        score_threshold = 0.75
+        #fig, ax = plt.subplots(figsize=(10, 10))
+        #ax.imshow(patch)
+
+        margin = 5  # Large margin to accommodate the possible bounding boxes
+
+        score_treshold = 0.75 # Has a low confidence threshold eg 0.5 to avoid false negatives and allow for manual elimination
 
         for pred_box, score in zip(pred_boxes, pred_scores):
-            if score < score_threshold:
+            if score < score_treshold:
                 continue
             x_min, y_min, x_max, y_max = pred_box
+            rect = mpatches.Rectangle(
+                (x_min, y_min), x_max - x_min, y_max - y_min,
+                linewidth=2, edgecolor='blue', facecolor='none', linestyle='dashed'
+            )
+            #ax.add_patch(rect)
 
             expanded_minc = max(0, x_min - margin) + j_offset
             expanded_maxc = x_max + margin + j_offset
@@ -90,15 +187,30 @@ class InferenceWithThreshold:
                 y_position = row['Cell Y Position']
                 
                 if expanded_minc <= x_position <= expanded_maxc and expanded_minr <= y_position <= expanded_maxr:
+                    #print("yess")
+                    #ax.plot(x_position - j_offset, y_position - i_offset, 'o', color='black', markersize=4)
                     boxes.append({
                         'Cell ID': row['Cell ID'],
                         'X Position': int(x_position),
                         'Y Position': int(y_position),
-                        'Bounding Box': [int(x_min + j_offset), int(y_min + i_offset), int(x_max + j_offset), int(y_max + i_offset)],
+                        'Bounding Box': [int(x_min + j_offset), int(y_min + i_offset), int(x_max+ j_offset), int(y_max + i_offset)],
                         'Granzyme B': row['Entire Cell Granzyme B (Opal 650) Mean (Normalized Counts, Total Weighting)'],
                         'Score': score
                     })
+                    # Plots the patches 
+                    rect = mpatches.Rectangle(
+                        (x_min, y_min), x_max - x_min, y_max - y_min,
+                        linewidth=2, edgecolor='red', facecolor='none'
+                    )
+                    #ax.add_patch(rect)
+                    #ax.text(x_min, y_min - 10, f'{score:.2f}', color='black', fontsize=12, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.5))
+
+
+        #plt.axis('off')
+        #plt.tight_layout()
+        #plt.show()
         return boxes
+
 
     def reconstruct_image(self, original_image, patches_with_boxes, patch_size):
         fig, ax = plt.subplots(1, figsize=(12, 12))
@@ -108,7 +220,8 @@ class InferenceWithThreshold:
                 bb = patch_box["Bounding Box"]
                 x_min, y_min, x_max, y_max = bb
                 rect = mpatches.Rectangle(
-                    (x_min, y_min), x_max - x_min, y_max - y_min,
+                    #(x_min , y_min), (x_max-j) - (x_min-j), (y_max-i) - (y_min-i),
+                    (x_min, y_min ), x_max - x_min, y_max - y_min,
                     linewidth=2, edgecolor='red', facecolor='none'
                 )
                 ax.add_patch(rect)
@@ -140,12 +253,14 @@ class InferenceWithThreshold:
         plt.tight_layout()
         plt.show()
 
+        # if you return fig can you plot later
+
     def manual_elimination(self, image, boxes):
         fig, ax = plt.subplots(1, figsize=(12, 12))
         ax.imshow(image)
         patches = []
         texts = []
-        selected = [False] * len(boxes)
+        selected = [False] * len(boxes)  # Track selection status of each box
 
         for box in boxes:
             bb = box["Bounding Box"]
@@ -189,14 +304,19 @@ class InferenceWithThreshold:
         plt.axis('off')
         plt.tight_layout()
 
+        # Enable smooth zoom and pan functionality
         zoom_factory(ax)
         panhandler(fig)
         fig.canvas.manager.toolbar.zoom()
 
+
         plt.show()
 
+        # Update boxes list based on selected status
         updated_boxes = [box for i, box in enumerate(boxes) if not selected[i]]
+
         return updated_boxes
+    
 
     def full_processing(self, image, patch_size, criteria_labels, image_name):
         patches = self.create_patches_no_box(image, patch_size)
@@ -205,15 +325,21 @@ class InferenceWithThreshold:
 
         for patch, pred_boxes, pred_scores, i, j in patches:
             properties = self.process_image(patch)
+            print('Generating bounding boxes...')
             boxes = self.generate_bounding_boxes(patch, properties, pred_boxes, pred_scores, criteria_labels, i, j)
             patches_with_boxes.append((patch, boxes, i, j))
 
         all_boxes = [box for _, boxes, _, _ in patches_with_boxes for box in boxes]
+        print('Number of boxes:', len(all_boxes))
+        print('Type of all_boxes:', type(all_boxes))
+
         if self.manual:
             valid_boxes = self.manual_elimination(image, all_boxes)
-            exclude_boxes = [box for box in all_boxes if box not in valid_boxes]
+            exlude_boxes = [box for box in all_boxes if box not in valid_boxes]
             return valid_boxes
 
+        #new_image = self.reconstruct_image(image, patches_with_boxes, patch_size)
+        #self.plot_image_with_boxes(new_image, all_boxes, title="Reconstructed Image with Bounding Boxes")
         return all_boxes
 
     def color_separate(self, ihc_rgb):
@@ -236,6 +362,8 @@ class InferenceWithThreshold:
         masks, flows, styles, diams = model.eval(input_image, diameter=None, channels=[0, 0])
 
         segmented_np = masks
+        #plt.imshow(segmented_np)
+
         properties = measure.regionprops(segmented_np, intensity_image=H[:, :, 0])
 
         nuclei_intensities = []
@@ -251,7 +379,10 @@ class InferenceWithThreshold:
 
             area = prop.area
             perimeter = prop.perimeter
-            circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter != 0 else 0
+            if perimeter == 0:
+                circularity = 0
+            else:
+                circularity = (4 * np.pi * area) / (perimeter ** 2)
             circularities.append(circularity)
 
         intensity_threshold = np.percentile(nuclei_intensities, 10)
@@ -262,7 +393,16 @@ class InferenceWithThreshold:
         ]
 
         lymphocyte_dab_mask = np.isin(masks, lymphocytes_with_dab)
+        #fig, ax = plt.subplots(figsize=(10, 10))
+        #ax.imshow(input_image, cmap='gray')
+        #ax.imshow(lymphocyte_dab_mask, alpha=0.5, cmap='jet')
+        #ax.set_title('Identified Lymphocytes with DAB')
+        #ax.axis('off')
+        #plt.show()
+
         filtered_properties = [prop for prop in properties if prop.label in lymphocytes_with_dab]
+        #filtered_properties
+
         return filtered_properties
 
     def save_processed_data(self, sample_name, image_name, data):
@@ -273,6 +413,7 @@ class InferenceWithThreshold:
         with open(file_path, 'wb') as f:
             pickle.dump(data, f)
 
+
     def load_processed_data(self, sample_name, image_name):
         file_path = os.path.join(self.processed_data_folder, sample_name, f'{image_name}.pkl')
         if os.path.exists(file_path):
@@ -281,16 +422,18 @@ class InferenceWithThreshold:
             return data
         return None
 
+
     def run(self, example):
-        inform_files = dbx.list_files_in_folder(self.inform_files)
-        image_files = dbx.list_files_in_folder(self.granzyme_b_image_folder)
+        inform_files = self.list_files_in_folder(self.inform_files)
+        image_files = self.list_files_in_folder(self.granzyme_b_image_folder)
         errors = os.listdir('/Users/rebeca/Documents/Code/SHY_lab/GB_Deep/processed_data/errors')
         errors = [f.split('_error.json')[0] for f in errors]
+
 
         for inform_file in inform_files:
             if inform_file.endswith('.xlsx'):
                 inform_path = self.inform_files + inform_file
-                inform_excel = dbx.read_excel_from_dropbox(inform_path)
+                inform_excel = self.read_excel_from_dropbox(inform_path)
                 name_sample = inform_file.split('.xlsx')[0]
                 if name_sample != example:
                     continue
@@ -304,6 +447,7 @@ class InferenceWithThreshold:
                 if not os.path.exists(processed_sample_folder):
                     os.makedirs(processed_sample_folder)
 
+
                 for image_file in relevant_images:
                     image_name = image_file.split('_Granzyme')[0]
 
@@ -312,30 +456,35 @@ class InferenceWithThreshold:
                         continue
 
                     processed_data = self.load_processed_data(name_sample, image_name)
+                    # load the name of the errors folder
                     if processed_data:
                         print(f'The image {image_name} was already processed!')
                         valid_cells.extend(processed_data)
                     else:
+                        break
+                        '''
                         try:
                             image_path = self.granzyme_b_image_folder + image_file
                             print(f'Processing image: {image_name}')
                             relevant_rows = self.relevant_rows(image_name, inform_excel)
-                            criteria_labels = label_relevant_cells(relevant_rows)
-                            gb_image = dbx.read_image_from_dropbox(image_path)
+                            criteria_labels = self.label_relevant_cells(relevant_rows)
+                            gb_image = self.read_image_from_dropbox(image_path)
                             all_boxes = self.full_processing(gb_image, self.patch_size, criteria_labels, image_name)
                             valid_cells.extend(all_boxes)
                             self.save_processed_data(name_sample, image_name, all_boxes)
-                            print(f'The image {image_name} was saved')
+                            print(f' The image {image_name} was saved')
                         except Exception as e:
                             self.errors.append({'image': image_file, 'error': str(e)})
                             print(f'Error processing {image_file}: {e}')
+                            #end the code here
                             json_path = f'processed_data/errors/{image_name}_error.json'
                             with open(json_path, 'w') as json_file:
                                 json.dump(image_name, json_file)
+                        '''
 
                 print(f'Done processing sample: {name_sample}')
                 optimal_threshold, inform_data = self.calculate_threshold(valid_cells, inform_excel)
-                return optimal_threshold, inform_data
+                return  optimal_threshold, inform_data
 
     def calculate_threshold(self, valid_cells, inform_data):
         valid_cell_ids = [cell['Cell ID'] for cell in valid_cells]
@@ -344,12 +493,13 @@ class InferenceWithThreshold:
         true_labels = inform_data['True Label'].tolist()
         granzyme_b_values = inform_data['Entire Cell Granzyme B (Opal 650) Mean (Normalized Counts, Total Weighting)'].tolist()
 
+        # Use ROC curve to determine the optimal threshold
         fpr, tpr, thresholds = roc_curve(true_labels, granzyme_b_values)
         roc_auc = auc(fpr, tpr)
 
         plt.figure()
-        plt.plot(fpr, tpr, color='purple', label=f'ROC curve (area = {roc_auc:.2f})')
-        plt.plot([0, 1], [0, 1], color='navy', linestyle='--')
+        plt.plot(fpr, tpr, color='purple',  label=f'ROC curve (area = {roc_auc:.2f})')
+        plt.plot([0, 1], [0, 1], color='navy',  linestyle='--')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
@@ -364,6 +514,18 @@ class InferenceWithThreshold:
         return optimal_threshold, inform_data
 
 
+
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+
 class GranzymeBAnalysis:
     def __init__(self, data, threshold):
         self.data = data
@@ -373,9 +535,12 @@ class GranzymeBAnalysis:
         self.target_cell3 = "CD56"
         self.target_cell4 = "Tumor cell"
         self.marker = "Granzyme B"
+        #print(self.data.columns)
         self.rename_columns()
         self.preprocess_data()
 
+
+   
     def rename_columns(self):
         self.data.rename(columns={
             'Entire Cell Granzyme B (Opal 650) Mean (Normalized Counts, Total Weighting)': 'GranzymeB',
@@ -390,15 +555,20 @@ class GranzymeBAnalysis:
 
     def preprocess_data(self):
         relevant_columns = [
-            'GranzymeB', 'CD8_Nuc', 'CD8_Cyt', 'CD8_Mem', 'CD4', 'CD56', 'DAPI', 'Auto'
+            'GranzymeB', 'CD8_Nuc', 'CD8_Cyt','CD8_Mem' ,'CD4', 'CD56', 'DAPI', 'Auto'
         ]
 
+        # Filter the data to include only the relevant columns
         self.data = self.data[relevant_columns + ['True Label', 'Phenotype']]
+
+        # Clean the data by replacing non-numeric values with NaN and then filling or dropping them
         self.data[relevant_columns] = self.data[relevant_columns].apply(pd.to_numeric, errors='coerce')
         self.data.dropna(inplace=True)
 
+        # Apply MinMax scaling to normalize the data
         scaler = MinMaxScaler()
         self.data[relevant_columns] = scaler.fit_transform(self.data[relevant_columns]) + 0.000001
+
 
     def visualize_granzyme_b_distribution(self):
         sns.histplot(self.data['GranzymeB'], kde=True)
@@ -406,6 +576,7 @@ class GranzymeBAnalysis:
         plt.title('Distribution of Granzyme B Mean Intensity')
         plt.xlabel('Granzyme B Mean Intensity')
         plt.ylabel('Frequency')
+        #plt.xscale('log')
         plt.show()
 
     def train_classifier(self):
@@ -429,15 +600,18 @@ class GranzymeBAnalysis:
         print(f'Standard Deviation of Cross-Validation Scores: {std_score}')
 
         return model, mean_score, std_score
+    
 
     def classify_and_visualize(self, model):
         self.data['Predicted Label'] = model.predict(self.data.drop(columns=['True Label', 'Phenotype']))
 
+        # Define target cell phenotypes
         target_labels = [self.target_cell1, self.target_cell2, self.target_cell3, self.target_cell4]
-
+        
         for target_label in target_labels:
             target_data = self.data[self.data['Phenotype'] == target_label]
 
+            # Visualization of Granzyme B vs CD8
             fig = plt.figure(figsize=(8, 6)) 
             plt.scatter(target_data['CD8_Nuc'], target_data['GranzymeB'], s=0.1, c=(target_data['GranzymeB'] >= self.threshold).astype(int), cmap='coolwarm')
             plt.xlim(0.00005, 5)
@@ -449,6 +623,7 @@ class GranzymeBAnalysis:
             plt.xlabel('CD8 Mean Intensity', fontsize=25)
             plt.title(f'For {target_label} cell type', fontsize=30)
             
+            # Calculate quadrants for CD8
             CD8Y = target_data['CD8_Nuc']
             Quadrant_1 = target_data[(CD8Y >= self.threshold)].shape[0] / target_data.shape[0]
             Quadrant_4 = target_data[(CD8Y < self.threshold)].shape[0] / target_data.shape[0]
@@ -457,6 +632,7 @@ class GranzymeBAnalysis:
             
             plt.show()
 
+            # Additional visualization with DAPI
             fig = plt.figure(figsize=(8, 6)) 
             plt.scatter(target_data['DAPI'], target_data['GranzymeB'], s=0.1, c=(target_data['GranzymeB'] >= self.threshold).astype(int), cmap='coolwarm')
             plt.xlim(0.00005, 5)
@@ -468,6 +644,7 @@ class GranzymeBAnalysis:
             plt.xlabel('DAPI Mean Intensity', fontsize=25)
             plt.title(f'For {target_label} cell type', fontsize=30)
             
+            # Calculate quadrants for DAPI
             DAPIY = target_data['DAPI']
             Quadrant_1 = target_data[(DAPIY >= self.threshold)].shape[0] / target_data.shape[0]
             Quadrant_4 = target_data[(DAPIY < self.threshold)].shape[0] / target_data.shape[0]
@@ -475,6 +652,64 @@ class GranzymeBAnalysis:
             plt.text(0.5, 0.000001, '{:.1%}'.format(Quadrant_4), fontsize=25)
             
             plt.show()
+
+    '''
+    def classify_and_visualize(self, model):
+        self.data['Predicted Label'] = model.predict(self.data.drop(columns=['True Label', 'Phenotype']))
+
+        # Define target cell phenotypes
+        target_labels = [self.target_cell1, self.target_cell2, self.target_cell3, self.target_cell4]
+        
+        for target_label in target_labels:
+            target_data = self.data[self.data['Phenotype'] == target_label]
+
+            # Visualization of Granzyme B vs CD8
+            fig = plt.figure(figsize=(8, 6)) 
+            plt.scatter(target_data['CD8_Nuc'],target_data['GranzymeB'], s=0.1, c=target_data['Predicted Label'], cmap='coolwarm')
+            plt.xlim(0.00005, 5)
+            plt.ylim(0.0000005, 5)
+            plt.axhline(y=self.threshold, color='r', linestyle='dashed')
+            plt.xscale("log")
+            plt.yscale("log")
+            plt.ylabel('Granzyme B Mean Intensity', fontsize=25)
+            plt.xlabel('CD8 Mean Intensity', fontsize=25)
+            plt.title(f'For {target_label} cell type', fontsize=30)
+            
+            # Calculate quadrants for CD8
+            CD8Y = target_data['CD8_Nuc']
+            Quadrant_1 = target_data[(CD8Y >= self.threshold)].shape[0] / target_data.shape[0]
+            Quadrant_4 = target_data[(CD8Y < self.threshold)].shape[0] / target_data.shape[0]
+            plt.text(0.5, 1, '{:.1%}'.format(Quadrant_1), fontsize=25)
+            plt.text(0.5, 0.000001, '{:.1%}'.format(Quadrant_4), fontsize=25)
+            
+            #fig_name2 = f'{target_label}_CD8.png'
+            #fig.savefig(fig_name2, dpi=200)
+            plt.show()
+
+            # Additional visualization with DAPI
+            fig = plt.figure(figsize=(8, 6)) 
+            plt.scatter( target_data['DAPI'],target_data['GranzymeB'], s=0.1, c=target_data['Predicted Label'], cmap='coolwarm')
+            plt.xlim(0.00005, 5)
+            plt.ylim(0.0000005, 5)
+            plt.axhline(y=self.threshold, color='r', linestyle='dashed')
+            plt.xscale("log")
+            plt.yscale("log")
+            plt.ylabel('Granzyme B Mean Intensity', fontsize=25)
+            plt.xlabel('DAPI Mean Intensity', fontsize=25)
+            plt.title(f'For {target_label} cell type', fontsize=30)
+            
+            # Calculate quadrants for DAPI
+            DAPIY = target_data['DAPI']
+            Quadrant_1 = target_data[(DAPIY >= self.threshold)].shape[0] / target_data.shape[0]
+            Quadrant_4 = target_data[(DAPIY < self.threshold)].shape[0] / target_data.shape[0]
+            plt.text(0.5, 1, '{:.1%}'.format(Quadrant_1), fontsize=25)
+            plt.text(0.5, 0.000001, '{:.1%}'.format(Quadrant_4), fontsize=25)
+            #fig_name2 = f'{target_label}_DAPI.png'
+            #fig.savefig(fig_name2, dpi=200)
+            plt.show()
+        '''
+
+
 
     def run(self):
         print("Starting Granzyme B analysis...")
@@ -498,4 +733,3 @@ optimal_threshold, inform_data = inference.run(example_sample)
 
 granzyme_b_analysis = GranzymeBAnalysis(inform_data, optimal_threshold)
 granzyme_b_analysis.run()
-
