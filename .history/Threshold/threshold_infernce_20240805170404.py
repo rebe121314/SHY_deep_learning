@@ -409,7 +409,7 @@ class InferenceWithThreshold:
     def run(self, example):
         inform_files = self.list_files_in_folder(self.inform_files)
         image_files = self.list_files_in_folder(self.granzyme_b_image_folder)
-        errors = os.listdir('data/processed_thresholds/errors/')
+        errors = os.listdir('/Users/rebeca/Documents/Code/SHY_lab/GB_Deep/processed_data/errors')
         errors = [f.split('_error.json')[0] for f in errors]
 
 

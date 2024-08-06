@@ -409,7 +409,7 @@ class InferenceWithThreshold:
     def run(self, example):
         inform_files = self.list_files_in_folder(self.inform_files)
         image_files = self.list_files_in_folder(self.granzyme_b_image_folder)
-        errors = os.listdir('data/processed_thresholds/errors/')
+        errors = os.listdir('/Users/rebeca/Documents/Code/SHY_lab/GB_Deep/processed_data/errors')
         errors = [f.split('_error.json')[0] for f in errors]
 
 
@@ -495,14 +495,14 @@ class InferenceWithThreshold:
 
 
 # Connect to Dropbox
-ACCESS_TOKEN = 'sl.B6b827TYsJ0m6n6CKa5wLwgTZu6yuDgU2qc03anfl5xgNAIllVKn_L-ve4zqnsYflMijlGQJt6vEotrnRjEv-_8q9askIMKlqSd_TLCzubb69APDjmF0yvTy9HsBF9fwPgwEt5DAmLX6'
+ACCESS_TOKEN = 'sl.sl.B6b827TYsJ0m6n6CKa5wLwgTZu6yuDgU2qc03anfl5xgNAIllVKn_L-ve4zqnsYflMijlGQJt6vEotrnRjEv-_8q9askIMKlqSd_TLCzubb69APDjmF0yvTy9HsBF9fwPgwEt5DAmLX6'
 dbx = dropbox.Dropbox(ACCESS_TOKEN)
 
 # Example usage:
 inform_files = '/Rebeca&Laura/inform_in_excel/'
 granzyme_b_image_folder = '/UEC, CD8 and GranzymeB/'
 processed_data_folder = 'data/processed_thresholds'
-model_path = 'data/saved_models/new_15epochs_model.pth'
+model_path = 'new_15epochs_model.pth'
 patch_size = 256
 example_sample = 'Opal 221_8'  # Example
 
