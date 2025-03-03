@@ -33,6 +33,7 @@ from accelerate import Accelerator
 """
 This script is used to evaluate the model using mean Average Precision (mAP) and IoU.
 It loads the train model to use in a validation dataset. 
+
 """
 
 #Loads the enviromental variable for Dropbox access
@@ -399,6 +400,18 @@ def calculate_iou(box1, box2):
     return iou
 
 
+# Plot precision-recall curve
+def plot_precision_recall(precision, recall):
+    """
+    Plots the Precision-Recall curve.
+    """
+    plt.figure(figsize=(10, 5))
+    plt.plot(recall, precision, marker='.', color ='purple')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.show()
+
 # Plot histogram of IoU
 def plot_iou_histogram(ious):
     """
@@ -426,7 +439,7 @@ def plot_iou_histogram_50(ious):
 
 # Plot image with predicted boxes and actual boxes
 def plot_images_pred_boxes(image, pred_boxes, pred_scores, true_boxes):
-    """
+        """
     Plots an image with predicted and actual bounding boxes.
     """
     fig, ax = plt.subplots(1, figsize=(12, 12))
@@ -461,7 +474,7 @@ def model_evaluation(model, data_loader, device):
 
     Returns:
         overall_result (dict): Computed evaluation metrics.
-        patch_metrics (dict): Computed metrics for individual patches
+        patch_metrics (dict): 
     """
     model.eval()
     overall_metric = MeanAveragePrecision(class_metrics=True)
@@ -523,7 +536,7 @@ def model_evaluation(model, data_loader, device):
     #print(f'Recall at mAP_50: {overall_result['mar_100_iou_0.50']}')
     #print(f"mAP per class: {overall_result['map_per_class']}")
 
-    # Optional --> plot metrics for individual patches
+    # Optionally plot metrics for individual patches
     
     iou_dist_50 = [iou for iou in iou_dist if iou >= 0.5]
     plot_iou_histogram_50(iou_dist_50)
@@ -536,13 +549,6 @@ def model_evaluation(model, data_loader, device):
     return overall_result, patch_metrics
 
 def plot_patch_metrics(patch_metrics, overall_result):
-    """
-    Plots histograms of mAP, mAP@50, and recall per patch.
-    
-    Args:
-        patch_metrics (list): List of per-patch evaluation metrics.
-        overall_result (dict): Overall evaluation results.
-    """
     maps = [metric['map'].cpu().item() for metric in patch_metrics]
     map_50s = [metric['map_50'].cpu().item() for metric in patch_metrics]
     recalls = [metric['mar_100_per_class'].cpu().item() for metric in patch_metrics]

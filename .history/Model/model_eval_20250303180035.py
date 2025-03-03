@@ -33,6 +33,7 @@ from accelerate import Accelerator
 """
 This script is used to evaluate the model using mean Average Precision (mAP) and IoU.
 It loads the train model to use in a validation dataset. 
+
 """
 
 #Loads the enviromental variable for Dropbox access
@@ -89,14 +90,7 @@ def load_image(dropbox_path):
     return skio.imread(file_bytes)
 
 def plot_image_with_boxes(image, boxes, title="Image with Bounding Boxes"):
-    """
-    Plots an image with bounding boxes overlaid.
-    
-    Args:
-        image (np.ndarray): The image to be displayed.
-        boxes (List[List[int]]): A list of bounding boxes, each represented as [x1, y1, x2, y2].
-        title (str): Title for the plot.
-    """
+
     fig, ax = plt.subplots(1, figsize=(12, 12))
     ax.imshow(image)
     for box in boxes:
@@ -147,16 +141,6 @@ def create_patches(image, boxes, patch_size):
 
 class GranzymeBDataset(Dataset):
     def __init__(self, image_dir: str, labels_dir: str, transform, patch_size: int = 256, val=False):
-        """
-        Custom dataset for loading images and labels from Dropbox.
-        
-        Args:
-            image_dir (str): Path to the image directory.
-            labels_dir (str): Path to the labels directory.
-            transform: Data augmentation transformations.
-            patch_size (int): Size of patches to generate.
-            val (bool): Whether this dataset is for validation.
-        """
         self.image_dir = image_dir
         self.labels_dir = labels_dir
         self.transform = transform
@@ -166,7 +150,6 @@ class GranzymeBDataset(Dataset):
         self.images, self.labels = self._load_images_and_labels()
 
     def _list_files_in_folder(self, folder_path: str) -> List[str]:
-        """Lists all files in a Dropbox folder."""
         files = []
         result = self.dbx.files_list_folder(folder_path)
         while True:
@@ -177,12 +160,10 @@ class GranzymeBDataset(Dataset):
         return files
 
     def _load_images_and_labels(self):
-        """Loads and matches images with corresponding label files."""
         label_files = self._list_files_in_folder(self.labels_dir)
         if self.val:
-            ## CHANGE HERE: depending on the validation method desired 
-            # Use the first 6 samples for validation (in the data set used). 
-            len_f = len(label_files) 
+            # Use the first 6 samples for validation
+            len_f = len(label_files)
             # select random 10% of the data for validation
             #make random
             #label_files = sample(label_files, int(len_f*0.8))
@@ -213,14 +194,15 @@ class GranzymeBDataset(Dataset):
         return len(self.images)
 
     def __getitem__(self, idx: int):
-        """Loads an image and corresponding label, creates patches, and applies transformations."""
         img_name = self.images[idx]
         label_name = self.labels[idx]
 
         # Read image path from Dropbox
         img_path = f"{self.image_dir}/{img_name}"
         image = load_image(img_path)
+        #print(image.shape)
 
+        # Read label path from Dropbox
         label_path = f"{self.labels_dir}/{label_name}"
         label_data = load_annotation(label_path)
 
@@ -280,10 +262,6 @@ class GranzymeBDataset(Dataset):
 
 
 def get_val_transforms():
-    """
-    Returns the transformation pipeline for validation data.
-    Converts images to tensors without additional augmentations.
-    """
     return A.Compose([
         #A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), max_pixel_value=255.0),
         ToTensorV2()
@@ -291,15 +269,6 @@ def get_val_transforms():
 
 
 def custom_collate_fn(batch):
-    """
-    Custom collate function for DataLoader to handle batches of image patches.
-    
-    Args:
-        batch (list): List of tuples containing image patches and target patches.
-    
-    Returns:
-        tuple: Two lists containing image patches and target patches.
-    """
     image_patches = []
     target_patches = []
 
@@ -326,18 +295,6 @@ def get_model(num_classes: int):
     return model
 
 def calculate_metrics(model, image, target, device):
-    """
-    Computes evaluation metrics including precision, recall, and IoU.
-    
-    Args:
-        model (torch.nn.Module): The trained object detection model.
-        image (torch.Tensor): The input image tensor.
-        target (dict): Ground truth bounding boxes and labels.
-        device (torch.device): Device to run inference on (CPU/GPU).
-    
-    Returns:
-        dict: Dictionary containing precision, recall, and IoU lists.
-    """
     metrics = {"precision": [], "recall": [], "iou": []}
 
     with torch.no_grad():
@@ -376,16 +333,6 @@ def calculate_metrics(model, image, target, device):
 
 
 def calculate_iou(box1, box2):
-    """
-    Computes the Intersection over Union (IoU) between two bounding boxes.
-    
-    Args:
-        box1 (list): Coordinates [x1, y1, x2, y2] of the first bounding box.
-        box2 (list): Coordinates [x1, y1, x2, y2] of the second bounding box.
-    
-    Returns:
-        float: IoU score between the two boxes.
-    """
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
@@ -398,12 +345,28 @@ def calculate_iou(box1, box2):
     iou = intersection / float(box1_area + box2_area - intersection)
     return iou
 
+# Plot training and validation losses
+def plot_losses(train_losses, val_losses):
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Training Loss', color = 'purple')
+    plt.plot(val_losses, label='Validation Loss', color= 'black')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title('Training and Validation Losses')
+    plt.show()
+
+# Plot precision-recall curve
+def plot_precision_recall(precision, recall):
+    plt.figure(figsize=(10, 5))
+    plt.plot(recall, precision, marker='.', color ='purple')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.show()
 
 # Plot histogram of IoU
 def plot_iou_histogram(ious):
-    """
-    Plots a histogram of Intersection over Union (IoU) values.
-    """
     plt.figure(figsize=(10, 5))
     plt.hist(ious, bins=50, color='purple', alpha=0.7)
     plt.xlabel('IoU')
@@ -413,9 +376,6 @@ def plot_iou_histogram(ious):
     plt.show()
 
 def plot_iou_histogram_50(ious):
-    """
-    Plots a histogram of IoU values greater than or equal to 50.
-    """
     plt.figure(figsize=(10, 5))
     plt.hist(ious, bins=50, color='purple', alpha=0.7)
     plt.xlabel('IoU')
@@ -426,9 +386,6 @@ def plot_iou_histogram_50(ious):
 
 # Plot image with predicted boxes and actual boxes
 def plot_images_pred_boxes(image, pred_boxes, pred_scores, true_boxes):
-    """
-    Plots an image with predicted and actual bounding boxes.
-    """
     fig, ax = plt.subplots(1, figsize=(12, 12))
     ax.imshow(image)
     for box, score in zip(pred_boxes, pred_scores):
@@ -461,7 +418,7 @@ def model_evaluation(model, data_loader, device):
 
     Returns:
         overall_result (dict): Computed evaluation metrics.
-        patch_metrics (dict): Computed metrics for individual patches
+        patch_metrics (dict): 
     """
     model.eval()
     overall_metric = MeanAveragePrecision(class_metrics=True)
@@ -523,7 +480,7 @@ def model_evaluation(model, data_loader, device):
     #print(f'Recall at mAP_50: {overall_result['mar_100_iou_0.50']}')
     #print(f"mAP per class: {overall_result['map_per_class']}")
 
-    # Optional --> plot metrics for individual patches
+    # Optionally plot metrics for individual patches
     
     iou_dist_50 = [iou for iou in iou_dist if iou >= 0.5]
     plot_iou_histogram_50(iou_dist_50)
@@ -536,13 +493,6 @@ def model_evaluation(model, data_loader, device):
     return overall_result, patch_metrics
 
 def plot_patch_metrics(patch_metrics, overall_result):
-    """
-    Plots histograms of mAP, mAP@50, and recall per patch.
-    
-    Args:
-        patch_metrics (list): List of per-patch evaluation metrics.
-        overall_result (dict): Overall evaluation results.
-    """
     maps = [metric['map'].cpu().item() for metric in patch_metrics]
     map_50s = [metric['map_50'].cpu().item() for metric in patch_metrics]
     recalls = [metric['mar_100_per_class'].cpu().item() for metric in patch_metrics]

@@ -399,6 +399,18 @@ def calculate_iou(box1, box2):
     return iou
 
 
+# Plot precision-recall curve
+def plot_precision_recall(precision, recall):
+    """
+    Plots the Precision-Recall curve.
+    """
+    plt.figure(figsize=(10, 5))
+    plt.plot(recall, precision, marker='.', color ='purple')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.show()
+
 # Plot histogram of IoU
 def plot_iou_histogram(ious):
     """

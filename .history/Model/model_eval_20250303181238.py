@@ -399,6 +399,18 @@ def calculate_iou(box1, box2):
     return iou
 
 
+# Plot precision-recall curve
+def plot_precision_recall(precision, recall):
+    """
+    Plots the Precision-Recall curve.
+    """
+    plt.figure(figsize=(10, 5))
+    plt.plot(recall, precision, marker='.', color ='purple')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision-Recall Curve')
+    plt.show()
+
 # Plot histogram of IoU
 def plot_iou_histogram(ious):
     """
@@ -461,7 +473,7 @@ def model_evaluation(model, data_loader, device):
 
     Returns:
         overall_result (dict): Computed evaluation metrics.
-        patch_metrics (dict): Computed metrics for individual patches
+        patch_metrics (dict): Computed metric
     """
     model.eval()
     overall_metric = MeanAveragePrecision(class_metrics=True)
